@@ -1,3 +1,6 @@
 gnome_model/*
 *.csv
 testing*
+*.json
+*.pickle
+*_raw*
