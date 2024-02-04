@@ -6,9 +6,13 @@ from typing import Tuple, List, Callable, Union, Dict
 from utils.preprocessing import GraphDataPoint
 from functools import partial
 import optax
-from tqdm.notebook import tqdm
+from tqdm.notebook import tqdm as tqdm_notebook
+from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, mean_squared_log_error
 from graph_model import count_params, pad_graph_to_nearest_power_of_two
+
+def placeholder(x):
+    return x
 
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
 #   and https://github.com/tisabe/jraph_MPEU/blob/master/jraph_MPEU/train.py
@@ -138,13 +142,18 @@ def eval_step(
         params:hk.Params, 
         hk_state:hk.State, 
         out_rng,
-        loss_fn:Callable=compute_loss
+        loss_fn:Callable=compute_loss,
+        is_notebook:bool=True
     ):
+    if is_notebook:
+        tqdm_fn = tqdm_notebook
+    else:
+        tqdm_fn = tqdm
     accumulated_loss = 0
     predictions = None
 
     compute_loss_fn = jax.jit(partial(loss_fn, net=net, is_eval=True))
-    for idx in tqdm(range(len(dataset)//batch_size + 1)):
+    for idx in tqdm_fn(range(len(dataset)//batch_size + 1)):
         graph = jraph.batch([x.input_graph for x in dataset[idx*batch_size:(idx+1)*batch_size]])
         label = jnp.array([x.target for x in dataset[idx*batch_size:(idx+1)*batch_size]])
         graph = pad_graph_to_nearest_power_of_two(graph)
@@ -169,8 +178,13 @@ def train(
         mpn_steps:int, 
         batch_size:int, 
         emb_size:int, 
-        net_fn:Callable
+        net_fn:Callable,
+        is_notebook:bool=True
     ):
+    if is_notebook:
+        tqdm_fn = tqdm_notebook
+    else:
+        tqdm_fn = tqdm
     """Training loop."""
     init_dict = train_eval_init(
                                 dataset=train_dataset, 
@@ -194,7 +208,7 @@ def train(
     # found in the jax documentation.
     compute_loss_fn_with_grad = jax.jit(jax.value_and_grad(compute_loss_fn))
     learning_curve = []
-    for idx in tqdm(range(num_train_steps)):
+    for idx in tqdm_fn(range(num_train_steps)):
         params, hk_state, opt_state, loss = train_step(
                                                 dataset=train_dataset,
                                                 params=params,
@@ -238,6 +252,7 @@ def evaluate(
         hk_state:hk.State,
         mpn_steps:int,
         batch_size:int,
+        is_notebook:bool=True
     ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Evaluation Script."""
     init_dict = train_eval_init(dataset=dataset, 
@@ -257,7 +272,8 @@ def evaluate(
             params=params, 
             hk_state=hk_state, 
             out_rng=out_rng,
-            loss_fn=compute_loss
+            loss_fn=compute_loss,
+            is_notebook=is_notebook
         )
     
     print('Completed evaluation.')
