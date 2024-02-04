@@ -3,13 +3,9 @@ from jraph import GraphsTuple
 import jraph
 import haiku as hk
 import jax
-from jax.nn import initializers
-from typing import Tuple, List, Dict, Any, Sequence
-from utils.preprocessing import GraphDataPoint
+from typing import Tuple, Callable
 from functools import partial
-import optax
-from gnome_model.crystal import mlp
-from sklearn.metrics import mean_squared_error, mean_squared_log_error
+import numpy as np
 
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
 def _nearest_bigger_power_of_two(x: int) -> int:
@@ -67,7 +63,7 @@ def count_params(params:hk.Params):
   return total_params, w_params, b_params
 
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
-def base_mlp(feats: jnp.ndarray, emb_size:int=128, activation_fn=jax.nn.silu, w_init_fn=None, layername:str=None) -> jnp.ndarray:
+def base_mlp(feats: jnp.ndarray, emb_size:int=128, activation_fn=jax.nn.silu, w_init_fn:Callable=None, layername:str=None) -> jnp.ndarray:
   """to be used as update functions for graph net."""
   net = hk.Sequential(
         [
@@ -123,40 +119,3 @@ def net_fn(graph: jraph.GraphsTuple, steps:int, emb_size:int=128) -> jraph.Graph
       update_edge_fn=jraph.concatenated_args(partial(update_edge_fn, layername='edge_linear_readout')),
       update_global_fn=jraph.concatenated_args(readout_global_fn))
   return readout(output)
-  
-def compute_loss(params: hk.Params, 
-                 state:hk.State, 
-                 rng, 
-                 graph: jraph.GraphsTuple, 
-                 label: jnp.ndarray,
-                 net: jraph.GraphsTuple,
-                 is_eval:bool=False
-                 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-  """Computes loss and accuracy."""
-  pred_graph, new_state = net.apply(params, state, rng, graph)
-  # preds = jax.nn.log_softmax(pred_graph.globals)
-  # targets = jax.nn.one_hot(label, 2)
-
-  preds = pred_graph.globals
-  targets = label
-
-  # Since we have an extra 'dummy' graph in our batch due to padding, we want
-  # to mask out any loss associated with the dummy graph.
-  # Since we padded with `pad_with_graphs` we can recover the mask by using
-  # get_graph_padding_mask.
-  mask = jraph.get_graph_padding_mask(pred_graph)
-
-  # MSE loss
-  squared_diff = jnp.square((preds-targets)*mask[:,None])
-  mean_loss = jnp.sum(squared_diff) / jnp.sum(mask)
-
-  # # Cross entropy loss.
-  # loss = -jnp.mean(preds * targets * mask[:, None])
-
-  # Accuracy taking into account the mask.
-  # accuracy = jnp.sum(
-  #     (jnp.argmax(pred_graph.globals, axis=1) == label) * mask) / jnp.sum(mask)
-  if is_eval:
-    return mean_loss, preds
-  else:
-    return mean_loss

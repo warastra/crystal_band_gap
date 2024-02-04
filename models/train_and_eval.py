@@ -8,11 +8,47 @@ from functools import partial
 import optax
 from tqdm.notebook import tqdm
 from sklearn.metrics import mean_squared_error, mean_squared_log_error
-from graph_model import count_params, pad_graph_to_nearest_power_of_two, compute_loss
+from graph_model import count_params, pad_graph_to_nearest_power_of_two
 
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
 #   and https://github.com/tisabe/jraph_MPEU/blob/master/jraph_MPEU/train.py
+def compute_loss(params: hk.Params, 
+                 state:hk.State, 
+                 rng, 
+                 graph: jraph.GraphsTuple, 
+                 label: jnp.ndarray,
+                 net: jraph.GraphsTuple,
+                 is_eval:bool=False
+                 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+  """Computes loss and accuracy."""
+  pred_graph, new_state = net.apply(params, state, rng, graph)
+  # preds = jax.nn.log_softmax(pred_graph.globals)
+  # targets = jax.nn.one_hot(label, 2)
 
+  preds = pred_graph.globals
+  targets = label
+
+  # Since we have an extra 'dummy' graph in our batch due to padding, we want
+  # to mask out any loss associated with the dummy graph.
+  # Since we padded with `pad_with_graphs` we can recover the mask by using
+  # get_graph_padding_mask.
+  mask = jraph.get_graph_padding_mask(pred_graph)
+
+  # MSE loss
+  squared_diff = jnp.square((preds-targets)*mask[:,None])
+  mean_loss = jnp.sum(squared_diff) / jnp.sum(mask)
+
+  # # Cross entropy loss.
+  # loss = -jnp.mean(preds * targets * mask[:, None])
+
+  # Accuracy taking into account the mask.
+  # accuracy = jnp.sum(
+  #     (jnp.argmax(pred_graph.globals, axis=1) == label) * mask) / jnp.sum(mask)
+  if is_eval:
+    return mean_loss, preds
+  else:
+    return mean_loss
+  
 def train_eval_init(dataset: List[GraphDataPoint], mpn_steps:int, batch_size:int, emb_size:int, net_fn:Callable, is_training:bool=False) -> hk.Params:
     out_rng, init_rng = jax.random.split(jax.random.PRNGKey(42))
     net_fn_with_steps = partial(net_fn, steps=mpn_steps, emb_size=emb_size)
@@ -190,10 +226,11 @@ def train(
   return params, hk_state, learning_curve
 
 def evaluate(dataset: List[GraphDataPoint],
+             net_fn:Callable,
              params: hk.Params, 
              hk_state:hk.State,
              mpn_steps:int,
-             batch_size:int
+             batch_size:int,
   ) -> Tuple[jnp.ndarray, jnp.ndarray]:
   """Evaluation Script."""
   init_dict = train_eval_init(dataset=dataset, 
