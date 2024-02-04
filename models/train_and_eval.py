@@ -159,9 +159,7 @@ def eval_step(
             predictions = jnp.concatenate([predictions, batch_preds])
         accumulated_loss += loss
 
-    print('Completed evaluation.')
     average_loss = accumulated_loss / len(dataset)
-    print(f'Eval loss: {average_loss}')
     return average_loss, predictions 
 
 def train(
@@ -261,5 +259,8 @@ def evaluate(
             out_rng=out_rng,
             loss_fn=compute_loss
         )
+    
+    print('Completed evaluation.')
+    print(f'Eval loss: {loss}')
 
     return loss, predictions
