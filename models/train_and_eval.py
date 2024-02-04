@@ -214,7 +214,7 @@ def train(
             validation_loss, val_preds = eval_step(
                                             val_dataset, 
                                             net=net, 
-                                            batch_size=5, 
+                                            batch_size=batch_size, 
                                             params=params, 
                                             hk_state=hk_state, 
                                             out_rng=out_rng, 
