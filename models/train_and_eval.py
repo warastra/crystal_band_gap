@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import jraph
 import haiku as hk
 import jax
-from typing import Tuple, List, Callable
+from typing import Tuple, List, Callable, Union, Dict
 from utils.preprocessing import GraphDataPoint
 from functools import partial
 import optax
@@ -12,44 +12,52 @@ from graph_model import count_params, pad_graph_to_nearest_power_of_two
 
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
 #   and https://github.com/tisabe/jraph_MPEU/blob/master/jraph_MPEU/train.py
-def compute_loss(params: hk.Params, 
-                 state:hk.State, 
-                 rng, 
-                 graph: jraph.GraphsTuple, 
-                 label: jnp.ndarray,
-                 net: jraph.GraphsTuple,
-                 is_eval:bool=False
-                 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-  """Computes loss and accuracy."""
-  pred_graph, new_state = net.apply(params, state, rng, graph)
-  # preds = jax.nn.log_softmax(pred_graph.globals)
-  # targets = jax.nn.one_hot(label, 2)
+def compute_loss(
+        params: hk.Params, 
+        state:hk.State, 
+        rng, 
+        graph: jraph.GraphsTuple, 
+        label: jnp.ndarray,
+        net: jraph.GraphsTuple,
+        is_eval:bool=False
+    ) -> Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]:
+    """Computes loss and accuracy."""
+    pred_graph, new_state = net.apply(params, state, rng, graph)
+    # preds = jax.nn.log_softmax(pred_graph.globals)
+    # targets = jax.nn.one_hot(label, 2)
 
-  preds = pred_graph.globals
-  targets = label
+    preds = pred_graph.globals
+    targets = label
 
-  # Since we have an extra 'dummy' graph in our batch due to padding, we want
-  # to mask out any loss associated with the dummy graph.
-  # Since we padded with `pad_with_graphs` we can recover the mask by using
-  # get_graph_padding_mask.
-  mask = jraph.get_graph_padding_mask(pred_graph)
+    # Since we have an extra 'dummy' graph in our batch due to padding, we want
+    # to mask out any loss associated with the dummy graph.
+    # Since we padded with `pad_with_graphs` we can recover the mask by using
+    # get_graph_padding_mask.
+    mask = jraph.get_graph_padding_mask(pred_graph)
 
-  # MSE loss
-  squared_diff = jnp.square((preds-targets)*mask[:,None])
-  mean_loss = jnp.sum(squared_diff) / jnp.sum(mask)
+    # MSE loss
+    squared_diff = jnp.square((preds-targets)*mask[:,None])
+    mean_loss = jnp.sum(squared_diff) / jnp.sum(mask)
 
-  # # Cross entropy loss.
-  # loss = -jnp.mean(preds * targets * mask[:, None])
+    # # Cross entropy loss.
+    # loss = -jnp.mean(preds * targets * mask[:, None])
 
-  # Accuracy taking into account the mask.
-  # accuracy = jnp.sum(
-  #     (jnp.argmax(pred_graph.globals, axis=1) == label) * mask) / jnp.sum(mask)
-  if is_eval:
-    return mean_loss, preds
-  else:
-    return mean_loss
+    # Accuracy taking into account the mask.
+    # accuracy = jnp.sum(
+    #     (jnp.argmax(pred_graph.globals, axis=1) == label) * mask) / jnp.sum(mask)
+    if is_eval:
+        return mean_loss, preds
+    else:
+        return mean_loss
   
-def train_eval_init(dataset: List[GraphDataPoint], mpn_steps:int, batch_size:int, emb_size:int, net_fn:Callable, is_training:bool=False) -> hk.Params:
+def train_eval_init(
+        dataset: List[GraphDataPoint], 
+        mpn_steps:int, 
+        batch_size:int, 
+        emb_size:int, 
+        net_fn:Callable, 
+        is_training:bool=False
+    ) -> Dict:
     out_rng, init_rng = jax.random.split(jax.random.PRNGKey(42))
     net_fn_with_steps = partial(net_fn, steps=mpn_steps, emb_size=emb_size)
     # Transform impure `net_fn` to pure functions with hk.transform.
@@ -124,133 +132,133 @@ def train_step(
     return updated_params, updated_state, opt_state, loss
 
 def eval_step(
-    dataset:List[GraphDataPoint], 
-    net:Callable, 
-    batch_size:int, 
-    params:hk.Params, 
-    hk_state:hk.State, 
-    out_rng,
-    loss_fn:Callable=compute_loss
-  ):
-  accumulated_loss = 0
-  predictions = None
+        dataset:List[GraphDataPoint], 
+        net:Callable, 
+        batch_size:int, 
+        params:hk.Params, 
+        hk_state:hk.State, 
+        out_rng,
+        loss_fn:Callable=compute_loss
+    ):
+    accumulated_loss = 0
+    predictions = None
 
-  compute_loss_fn = jax.jit(partial(loss_fn, net=net, is_eval=True))
-  for idx in tqdm(range(len(dataset)//batch_size + 1)):
-    graph = jraph.batch([x.input_graph for x in dataset[idx*batch_size:(idx+1)*batch_size]])
-    label = jnp.array([x.target for x in dataset[idx*batch_size:(idx+1)*batch_size]])
-    graph = pad_graph_to_nearest_power_of_two(graph)
-    label = jnp.concatenate([label, jnp.array([[0]])])
+    compute_loss_fn = jax.jit(partial(loss_fn, net=net, is_eval=True))
+    for idx in tqdm(range(len(dataset)//batch_size + 1)):
+        graph = jraph.batch([x.input_graph for x in dataset[idx*batch_size:(idx+1)*batch_size]])
+        label = jnp.array([x.target for x in dataset[idx*batch_size:(idx+1)*batch_size]])
+        graph = pad_graph_to_nearest_power_of_two(graph)
+        label = jnp.concatenate([label, jnp.array([[0]])])
 
-    loss, batch_preds = compute_loss_fn(params, hk_state, out_rng, graph, label)
-    # remove the last predictions because it's the prediction for the padded graph
-    batch_preds = batch_preds[:-1] 
-    if predictions is None:
-      predictions = batch_preds
-    else:
-      predictions = jnp.concatenate([predictions, batch_preds])
-    accumulated_loss += loss
-    if idx % 100 == 0 and idx != 0:
-      print(f'Evaluated {idx + 1} graphs')
+        loss, batch_preds = compute_loss_fn(params, hk_state, out_rng, graph, label)
+        # remove the last predictions because it's the prediction for the padded graph
+        batch_preds = batch_preds[:-1] 
+        if predictions is None:
+            predictions = batch_preds
+        else:
+            predictions = jnp.concatenate([predictions, batch_preds])
+        accumulated_loss += loss
 
-  print('Completed evaluation.')
-  loss = accumulated_loss / len(dataset)
-  print(f'Eval loss: {loss}')
-  return loss, predictions 
+    print('Completed evaluation.')
+    loss = accumulated_loss / len(dataset)
+    print(f'Eval loss: {loss}')
+    return loss, predictions 
 
 def train(
-    train_dataset: List[GraphDataPoint], 
-    val_dataset: List[GraphDataPoint], 
-    num_train_steps: int, 
-    mpn_steps:int, 
-    batch_size:int, 
-    emb_size:int, 
-    net_fn:Callable
-  ):
-  """Training loop."""
-  init_dict = train_eval_init(
-                              dataset=train_dataset, 
-                              mpn_steps=mpn_steps, 
-                              batch_size=batch_size, 
-                              emb_size=emb_size,
-                              net_fn=net_fn,
-                              is_training=True
+        train_dataset: List[GraphDataPoint], 
+        val_dataset: List[GraphDataPoint], 
+        num_train_steps: int, 
+        mpn_steps:int, 
+        batch_size:int, 
+        emb_size:int, 
+        net_fn:Callable
+    ):
+    """Training loop."""
+    init_dict = train_eval_init(
+                                dataset=train_dataset, 
+                                mpn_steps=mpn_steps, 
+                                batch_size=batch_size, 
+                                emb_size=emb_size,
+                                net_fn=net_fn,
+                                is_training=True
                             )
-  net = init_dict['net']
-  out_rng = init_dict['out_rng']
-  params = init_dict['params']
-  hk_state = init_dict['hk_state']
-  opt_state = init_dict['opt_state']
-  optimizer = init_dict['optimizer']
+    net = init_dict['net']
+    out_rng = init_dict['out_rng']
+    params = init_dict['params']
+    hk_state = init_dict['hk_state']
+    opt_state = init_dict['opt_state']
+    optimizer = init_dict['optimizer']
 
-  compute_loss_fn = partial(compute_loss, net=net)
-  # We jit the computation of our loss, since this is the main computation.
-  # Using jax.jit means that we will use a single accelerator. If you want
-  # to use more than 1 accelerator, use jax.pmap. More information can be
-  # found in the jax documentation.
-  compute_loss_fn_with_grad = jax.jit(jax.value_and_grad(compute_loss_fn))
-  learning_curve = []
-  for idx in tqdm(range(num_train_steps)):
-    params, hk_state, opt_state, loss = train_step(
-                                                    dataset=train_dataset,
-                                                    params=params,
-                                                    hk_state=hk_state,
-                                                    loss_with_grad_fn=compute_loss_fn_with_grad,
-                                                    net=net,
-                                                    optimizer=optimizer,
-                                                    opt_state=opt_state,
-                                                    step=idx,
-                                                    batch_size=batch_size,
-                                                    out_rng=out_rng
-                                                  )
-    if idx % 500 == 0:
-        print(f'step: {idx}, train loss: {loss}')
-        validation_loss, val_preds = eval_step(
-                                        val_dataset, 
-                                        net=net, 
-                                        batch_size=5, 
-                                        params=params, 
-                                        hk_state=hk_state, 
-                                        out_rng=out_rng, 
-                                        loss_fn=compute_loss)
-        print(f'step: {idx}, validation loss: {validation_loss}')
-        y_val = [x.target for x in val_dataset]
-        val_loss_sklearn = mean_squared_error(val_preds, y_val)
-        learning_curve.append({
-            "train_loss":loss,
-            "validation_loss":validation_loss,
-            "validation_loss_sklearn":val_loss_sklearn,
-            "n_data_point":idx*batch_size
-          })
-  print('Training finished')
-  return params, hk_state, learning_curve
+    compute_loss_fn = partial(compute_loss, net=net)
+    # We jit the computation of our loss, since this is the main computation.
+    # Using jax.jit means that we will use a single accelerator. If you want
+    # to use more than 1 accelerator, use jax.pmap. More information can be
+    # found in the jax documentation.
+    compute_loss_fn_with_grad = jax.jit(jax.value_and_grad(compute_loss_fn))
+    learning_curve = []
+    for idx in tqdm(range(num_train_steps)):
+        params, hk_state, opt_state, loss = train_step(
+                                                dataset=train_dataset,
+                                                params=params,
+                                                hk_state=hk_state,
+                                                loss_with_grad_fn=compute_loss_fn_with_grad,
+                                                net=net,
+                                                optimizer=optimizer,
+                                                opt_state=opt_state,
+                                                step=idx,
+                                                batch_size=batch_size,
+                                                out_rng=out_rng
+                                            )
+        if idx % 500 == 0 and idx != 0:
+            print(f'step: {idx}, train loss: {loss}')
+            validation_loss, val_preds = eval_step(
+                                            val_dataset, 
+                                            net=net, 
+                                            batch_size=5, 
+                                            params=params, 
+                                            hk_state=hk_state, 
+                                            out_rng=out_rng, 
+                                            loss_fn=compute_loss
+                                        )
+            print(f'step: {idx}, validation loss: {validation_loss}')
+            y_val = [x.target for x in val_dataset]
+            val_loss_sklearn = mean_squared_error(val_preds, y_val)
+            learning_curve.append({
+                "train_loss":loss,
+                "validation_loss":validation_loss,
+                "validation_loss_sklearn":val_loss_sklearn,
+                "n_data_point":idx*batch_size
+            })
+    print('Training finished')
+    return params, hk_state, learning_curve
 
-def evaluate(dataset: List[GraphDataPoint],
-             net_fn:Callable,
-             params: hk.Params, 
-             hk_state:hk.State,
-             mpn_steps:int,
-             batch_size:int,
-  ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-  """Evaluation Script."""
-  init_dict = train_eval_init(dataset=dataset, 
-                              mpn_steps=mpn_steps, 
-                              batch_size=batch_size, 
-                              emb_size=params['linear_1']['w'].shape[1],
-                              net_fn=net_fn,
-                              is_training=False
+def evaluate(
+        dataset: List[GraphDataPoint],
+        net_fn:Callable,
+        params: hk.Params, 
+        hk_state:hk.State,
+        mpn_steps:int,
+        batch_size:int,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """Evaluation Script."""
+    init_dict = train_eval_init(dataset=dataset, 
+                                mpn_steps=mpn_steps, 
+                                batch_size=batch_size, 
+                                emb_size=params['linear_1']['w'].shape[1],
+                                net_fn=net_fn,
+                                is_training=False
                             )
-  net = init_dict['net']
-  out_rng = init_dict['out_rng']
+    net = init_dict['net']
+    out_rng = init_dict['out_rng']
 
-  loss, predictions = eval_step(
-    dataset=dataset, 
-    net=net, 
-    batch_size=batch_size, 
-    params=params, 
-    hk_state=hk_state, 
-    out_rng=out_rng,
-    loss_fn=compute_loss
-  )
+    loss, predictions = eval_step(
+            dataset=dataset, 
+            net=net, 
+            batch_size=batch_size, 
+            params=params, 
+            hk_state=hk_state, 
+            out_rng=out_rng,
+            loss_fn=compute_loss
+        )
 
-  return loss, predictions
+    return loss, predictions
