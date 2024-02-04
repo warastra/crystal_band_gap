@@ -160,9 +160,9 @@ def eval_step(
         accumulated_loss += loss
 
     print('Completed evaluation.')
-    loss = accumulated_loss / len(dataset)
-    print(f'Eval loss: {loss}')
-    return loss, predictions 
+    average_loss = accumulated_loss / len(dataset)
+    print(f'Eval loss: {average_loss}')
+    return average_loss, predictions 
 
 def train(
         train_dataset: List[GraphDataPoint], 
