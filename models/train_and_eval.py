@@ -220,9 +220,10 @@ def train(
                                             out_rng=out_rng, 
                                             loss_fn=compute_loss
                                         )
-            print(f'step: {idx}, validation loss: {validation_loss}')
             y_val = [x.target for x in val_dataset]
             val_loss_sklearn = mean_squared_error(val_preds, y_val)
+            print(f'step: {idx}, validation loss: {val_loss_sklearn}')
+
             learning_curve.append({
                 "train_loss":loss,
                 "validation_loss":validation_loss,
