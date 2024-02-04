@@ -3,28 +3,13 @@ from jraph import GraphsTuple
 import jraph
 import haiku as hk
 import jax
-from typing import Tuple, List, Dict, Any
+from jax.nn import initializers
+from typing import Tuple, List, Dict, Any, Sequence
 from utils.preprocessing import GraphDataPoint
-from tqdm.notebook import tqdm
-import functools
-import optax
-from gnome_model.gnn import GraphNetwork as GnomeGraphNetwork
-from gnome_model.crystal import mlp
 from functools import partial
-
-def count_params(params:hk.Params):
-  w_params = 0
-  b_params = 0
-  total_params = 0
-  for layer in params.keys():
-      w_size = params[layer]['w'].shape
-      w_param_cnt = w_size[0] * w_size[1]
-      w_params += w_param_cnt
-      b_param_count = params[layer]['b'].shape[0]
-      b_params += b_param_count
-      total_params += w_param_cnt + b_param_count
-
-  return total_params, w_params, b_params
+import optax
+from gnome_model.crystal import mlp
+from sklearn.metrics import mean_squared_error, mean_squared_log_error
 
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
 def _nearest_bigger_power_of_two(x: int) -> int:
@@ -58,65 +43,97 @@ def pad_graph_to_nearest_power_of_two(graphs_tuple: GraphsTuple) -> GraphsTuple:
   return jraph.pad_with_graphs(graphs_tuple, pad_nodes_to, pad_edges_to,
                                pad_graphs_to)
 
+def count_params(params:hk.Params):
+  w_params = 0
+  b_params = 0
+  total_params = 0
+  for layer in params.keys():
+      try:
+        w_size = params[layer]['w'].shape
+        w_param_cnt = w_size[0] * w_size[1]
+        b_param_count = params[layer]['b'].shape[0]
+
+        w_params += w_param_cnt
+        b_params += b_param_count
+        total_params += w_param_cnt + b_param_count
+      except:
+        try:
+          l_size = params[layer]['scale'].shape
+        except:
+          l_size = params[layer].shape
+        l_param_cnt = l_size[0]
+        total_params += l_param_cnt
+
+  return total_params, w_params, b_params
+
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
-@jraph.concatenated_args
-def edge_update_fn(feats: jnp.ndarray) -> jnp.ndarray:
-  """Edge update function for graph net."""
+def base_mlp(feats: jnp.ndarray, emb_size:int=128, activation_fn=jax.nn.silu, w_init_fn=None, layername:str=None) -> jnp.ndarray:
+  """to be used as update functions for graph net."""
   net = hk.Sequential(
-      [hk.Linear(128), jax.nn.swish,
-       hk.Linear(128)])
+        [
+          hk.Linear(emb_size, w_init=w_init_fn), activation_fn,
+          hk.Linear(emb_size, w_init=w_init_fn), 
+          hk.LayerNorm(axis=-1,
+                  create_scale=True,
+                  create_offset=True)
+        ]
+        , name=layername
+      )
   return net(feats)
 
-@jraph.concatenated_args
-def node_update_fn(feats: jnp.ndarray) -> jnp.ndarray:
-  """Node update function for graph net."""
-  net = hk.Sequential(
-      [hk.Linear(128), jax.nn.swish,
-       hk.Linear(128)])
-  return net(feats)
-
-@jraph.concatenated_args
-def update_global_fn(feats: jnp.ndarray) -> jnp.ndarray:
-  """Global update function for graph net."""
+def readout_mlp(feats: jnp.ndarray, emb_size:int=128, activation_fn=jax.nn.silu, w_init_fn=None) -> jnp.ndarray:
+  """to be used as update functions for graph net."""
   # BandGap Prediction is a regression, so output a single value.
   net = hk.Sequential(
-      [hk.Linear(128), jax.nn.swish,])
+      [
+        hk.Linear(emb_size, w_init=w_init_fn), activation_fn, 
+        hk.LayerNorm(axis=-1,
+                  create_scale=True,
+                  create_offset=True,),
+        hk.Linear(1)
+      ] 
+      , name='global_readout_linear')
   return net(feats)
 
-@jraph.concatenated_args
-def readout_global_fn(feats: jnp.ndarray) -> jnp.ndarray:
-  """Global update function for graph net."""
-  # BandGap Prediction is a regression, so output a single value.
-  net = hk.Sequential(
-      [hk.Linear(128), jax.nn.swish,
-       hk.Linear(1)])
-  return net(feats)
-
-def net_fn(graph: jraph.GraphsTuple, steps:int) -> jraph.GraphsTuple:
+def net_fn(graph: jraph.GraphsTuple, steps:int, emb_size:int=128) -> jraph.GraphsTuple:
   # Add a global paramater for graph classification.
-  graph = graph._replace(globals=jnp.zeros([graph.n_node.shape[0], 1]))
+  graph = graph._replace(globals=jnp.ones([graph.n_node.shape[0], 1]))
   embedder = jraph.GraphMapFeatures(
-      hk.Linear(128), hk.Linear(128), hk.Linear(128))
-  net = jraph.GraphNetGAT(
-      update_node_fn=node_update_fn,
-      update_edge_fn=edge_update_fn,
-      update_global_fn=update_global_fn)
+      hk.Linear(emb_size), 
+      hk.Linear(emb_size), 
+      hk.Linear(emb_size))
   
-  readout = jraph.GraphNetGAT(
-      update_node_fn=node_update_fn,
-      update_edge_fn=edge_update_fn,
-      update_global_fn=readout_global_fn)
+  weight_init_fn = hk.initializers.TruncatedNormal(1. / np.sqrt(1e4))
+  mlp_fn = partial(base_mlp, emb_size=emb_size, activation_fn=jax.nn.silu, w_init_fn=weight_init_fn)
+  readout_global_fn = partial(readout_mlp, emb_size=emb_size, activation_fn=jax.nn.silu, w_init_fn=weight_init_fn)
+  node_update_fn = update_edge_fn = update_global_fn = mlp_fn
+
   
   output = embedder(graph)
-  for _ in range(steps):
+  for i in range(steps):
+    net = jraph.GraphNetwork(
+        update_node_fn=jraph.concatenated_args(partial(node_update_fn, layername='mpnn_node_step_{}'.format(str(i)))),
+        update_edge_fn=jraph.concatenated_args(partial(update_edge_fn, layername='mpnn_edge_step_{}'.format(str(i)))),
+        update_global_fn=jraph.concatenated_args(partial(update_global_fn, layername='mpnn_global_step_{}'.format(str(i))))
+      )
     output = net(output)
 
+  readout = jraph.GraphNetwork(
+      update_node_fn=jraph.concatenated_args(partial(node_update_fn, layername='node_linear_readout')),
+      update_edge_fn=jraph.concatenated_args(partial(update_edge_fn, layername='edge_linear_readout')),
+      update_global_fn=jraph.concatenated_args(readout_global_fn))
   return readout(output)
   
-def compute_loss(params: hk.Params, graph: jraph.GraphsTuple, label: jnp.ndarray,
-                 net: jraph.GraphsTuple) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def compute_loss(params: hk.Params, 
+                 state:hk.State, 
+                 rng, 
+                 graph: jraph.GraphsTuple, 
+                 label: jnp.ndarray,
+                 net: jraph.GraphsTuple,
+                 is_eval:bool=False
+                 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
   """Computes loss and accuracy."""
-  pred_graph = net.apply(params, graph)
+  pred_graph, new_state = net.apply(params, state, rng, graph)
   # preds = jax.nn.log_softmax(pred_graph.globals)
   # targets = jax.nn.one_hot(label, 2)
 
@@ -130,7 +147,8 @@ def compute_loss(params: hk.Params, graph: jraph.GraphsTuple, label: jnp.ndarray
   mask = jraph.get_graph_padding_mask(pred_graph)
 
   # MSE loss
-  loss = jnp.mean(jnp.square((preds-targets)*mask[:,None]))
+  squared_diff = jnp.square((preds-targets)*mask[:,None])
+  mean_loss = jnp.sum(squared_diff) / jnp.sum(mask)
 
   # # Cross entropy loss.
   # loss = -jnp.mean(preds * targets * mask[:, None])
@@ -138,79 +156,7 @@ def compute_loss(params: hk.Params, graph: jraph.GraphsTuple, label: jnp.ndarray
   # Accuracy taking into account the mask.
   # accuracy = jnp.sum(
   #     (jnp.argmax(pred_graph.globals, axis=1) == label) * mask) / jnp.sum(mask)
-  return loss
-
-# Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
-def train(dataset: List[GraphDataPoint], num_train_steps: int, mpn_steps:int) -> hk.Params:
-  """Training loop."""
-
-  net_fn_with_steps = partial(net_fn, steps=mpn_steps)
-  # Transform impure `net_fn` to pure functions with hk.transform.
-  net = hk.without_apply_rng(hk.transform(net_fn_with_steps))
-  # Get a candidate graph and label to initialize the network.
-  graph = dataset[0].input_graph
-
-  # Initialize the network.
-  params = net.init(jax.random.PRNGKey(42), graph)
-  print('# of trainable parameters: ', count_params(params))
-  # Initialize the optimizer.
-  opt_init, opt_update = optax.adam(1e-4)
-  opt_state = opt_init(params)
-
-  compute_loss_fn = functools.partial(compute_loss, net=net)
-  # We jit the computation of our loss, since this is the main computation.
-  # Using jax.jit means that we will use a single accelerator. If you want
-  # to use more than 1 accelerator, use jax.pmap. More information can be
-  # found in the jax documentation.
-  compute_loss_fn = jax.jit(jax.value_and_grad(
-      compute_loss_fn, has_aux=False))
-
-  for idx in tqdm(range(num_train_steps)):
-    graph = dataset[idx % len(dataset)].input_graph
-    label = dataset[idx % len(dataset)].target
-    # Jax will re-jit your graphnet every time a new graph shape is encountered.
-    # In the limit, this means a new compilation every training step, which
-    # will result in *extremely* slow training. To prevent this, pad each
-    # batch of graphs to the nearest power of two. Since jax maintains a cache
-    # of compiled programs, the compilation cost is amortized.
-    graph = pad_graph_to_nearest_power_of_two(graph)
-
-    # Since padding is implemented with pad_with_graphs, an extra graph has
-    # been added to the batch, which means there should be an extra label.
-    label = jnp.concatenate([label, jnp.array([0])])
-
-    loss, grad = compute_loss_fn(params, graph, label)
-    updates, opt_state = opt_update(grad, opt_state, params)
-    params = optax.apply_updates(params, updates)
-    if idx % 50 == 0:
-      print(f'step: {idx}, loss: {loss}')
-  print('Training finished')
-  return params
-
-def evaluate(dataset: List[GraphDataPoint],
-             params: hk.Params, mpn_steps:int) -> Tuple[jnp.ndarray, jnp.ndarray]:
-  """Evaluation Script."""
-  net_fn_with_steps = partial(net_fn, steps=mpn_steps)
-  # Transform impure `net_fn` to pure functions with hk.transform.
-  net = hk.without_apply_rng(hk.transform(net_fn_with_steps))
-  # Get a candidate graph and label to initialize the network.
-  graph = dataset[0].input_graph
-  accumulated_loss = 0
-  accumulated_accuracy = 0
-  compute_loss_fn = jax.jit(functools.partial(compute_loss, net=net))
-  for idx in tqdm(range(len(dataset))):
-    graph = dataset[idx].input_graph
-    label = dataset[idx].target
-    graph = pad_graph_to_nearest_power_of_two(graph)
-    label = jnp.concatenate([label, jnp.array([0])])
-    loss = compute_loss_fn(params, graph, label)
-    # accumulated_accuracy += acc
-    accumulated_loss += loss
-    if idx % 100 == 0:
-      print(f'Evaluated {idx + 1} graphs')
-  print('Completed evaluation.')
-  loss = accumulated_loss / idx
-  # accuracy = accumulated_accuracy / idx
-  # print(f'Eval loss: {loss}, accuracy {accuracy}')
-  print(f'Eval loss: {loss}')
-  return loss
+  if is_eval:
+    return mean_loss, preds
+  else:
+    return mean_loss

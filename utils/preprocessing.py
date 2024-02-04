@@ -96,4 +96,3 @@ def get_graph_dataset(
       dataset.append(GraphDataPoint(input_graph=input_graph, target=target, id=ids[i]))
     
     return dataset
-   

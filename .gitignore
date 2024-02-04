@@ -4,3 +4,4 @@ testing*
 *.json
 *.pickle
 *_raw*
+*_depr_*
