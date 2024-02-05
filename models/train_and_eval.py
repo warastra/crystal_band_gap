@@ -11,9 +11,6 @@ from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, mean_squared_log_error
 from graph_model import count_params, pad_graph_to_nearest_power_of_two
 
-def placeholder(x):
-    return x
-
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
 #   and https://github.com/tisabe/jraph_MPEU/blob/master/jraph_MPEU/train.py
 def compute_loss(

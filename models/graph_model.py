@@ -76,16 +76,23 @@ def base_mlp(feats: jnp.ndarray, emb_size:int=128, activation_fn=jax.nn.silu, w_
         , name=layername
       )
   return net(feats)
-
-def readout_mlp(feats: jnp.ndarray, emb_size:int=128, activation_fn=jax.nn.silu, w_init_fn=None) -> jnp.ndarray:
+def readout_mlp(feats: jnp.ndarray, emb_size:int=128, w_init_fn=None) -> jnp.ndarray:
   """to be used as update functions for graph net."""
   # BandGap Prediction is a regression, so output a single value.
   net = hk.Sequential(
       [
-        hk.Linear(emb_size, w_init=w_init_fn), activation_fn, 
-        hk.LayerNorm(axis=-1,
-                  create_scale=True,
-                  create_offset=True,),
+        hk.Linear(emb_size, w_init=w_init_fn),
+        hk.Linear(emb_size, w_init=w_init_fn)
+      ] 
+      , name='global_linear')
+  return net(feats)
+
+def readout_mlp(feats: jnp.ndarray, emb_size:int=128, w_init_fn=None) -> jnp.ndarray:
+  """to be used as update functions for graph net."""
+  # BandGap Prediction is a regression, so output a single value.
+  net = hk.Sequential(
+      [
+        hk.Linear(emb_size, w_init=w_init_fn),
         hk.Linear(1)
       ] 
       , name='global_readout_linear')
