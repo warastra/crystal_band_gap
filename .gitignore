@@ -5,3 +5,6 @@ testing*
 *.pickle
 *_raw*
 *_depr_*
+*.png
+sinema*
+amorphous_oxides*

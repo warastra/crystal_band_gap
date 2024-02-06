@@ -9,7 +9,7 @@ import optax
 from tqdm.notebook import tqdm as tqdm_notebook
 from tqdm import tqdm
 from sklearn.metrics import mean_squared_error, mean_squared_log_error
-from graph_model import count_params, pad_graph_to_nearest_power_of_two
+from .graph_model import count_params, pad_graph_to_nearest_power_of_two
 
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
 #   and https://github.com/tisabe/jraph_MPEU/blob/master/jraph_MPEU/train.py
@@ -60,7 +60,7 @@ def train_eval_init(
         is_training:bool=False
     ) -> Dict:
     out_rng, init_rng = jax.random.split(jax.random.PRNGKey(42))
-    net_fn_with_steps = partial(net_fn, steps=mpn_steps, emb_size=emb_size)
+    net_fn_with_steps = partial(net_fn, steps=mpn_steps, hidden_size=emb_size)
     # Transform impure `net_fn` to pure functions with hk.transform.
     net = hk.transform_with_state(net_fn_with_steps)
     # Get a candidate graph and label to initialize the network.

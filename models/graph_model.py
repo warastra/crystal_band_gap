@@ -63,52 +63,56 @@ def count_params(params:hk.Params):
   return total_params, w_params, b_params
 
 # Adapted from https://github.com/deepmind/jraph/blob/master/jraph/ogb_examples/train.py
-def base_mlp(feats: jnp.ndarray, emb_size:int=128, activation_fn=jax.nn.silu, w_init_fn:Callable=None, layername:str=None) -> jnp.ndarray:
+def base_mlp(feats: jnp.ndarray, hidden_size:int=128, activation_fn=jax.nn.silu, w_init_fn:Callable=None, layername:str=None) -> jnp.ndarray:
   """to be used as update functions for graph net."""
   net = hk.Sequential(
         [
-          hk.Linear(emb_size, w_init=w_init_fn), activation_fn,
-          hk.Linear(emb_size, w_init=w_init_fn), 
-          hk.LayerNorm(axis=-1,
-                  create_scale=True,
-                  create_offset=True)
+          hk.Linear(hidden_size, w_init=w_init_fn), activation_fn,
+          hk.dropout(rate=0.1),
+          hk.Linear(hidden_size, w_init=w_init_fn), 
+        #   hk.LayerNorm(axis=-1,
+        #           create_scale=True,
+        #           create_offset=True)
         ]
         , name=layername
       )
   return net(feats)
-def readout_mlp(feats: jnp.ndarray, emb_size:int=128, w_init_fn=None) -> jnp.ndarray:
+def global_mlp(feats: jnp.ndarray, hidden_size:int=128, w_init_fn=None) -> jnp.ndarray:
   """to be used as update functions for graph net."""
   # BandGap Prediction is a regression, so output a single value.
   net = hk.Sequential(
       [
-        hk.Linear(emb_size, w_init=w_init_fn),
-        hk.Linear(emb_size, w_init=w_init_fn)
+        hk.Linear(hidden_size, w_init=w_init_fn),
+        hk.dropout(rate=0.1),
+        hk.Linear(hidden_size, w_init=w_init_fn),
       ] 
       , name='global_linear')
   return net(feats)
 
-def readout_mlp(feats: jnp.ndarray, emb_size:int=128, w_init_fn=None) -> jnp.ndarray:
+def readout_mlp(feats: jnp.ndarray, hidden_size:int=128, w_init_fn=None) -> jnp.ndarray:
   """to be used as update functions for graph net."""
   # BandGap Prediction is a regression, so output a single value.
   net = hk.Sequential(
       [
-        hk.Linear(emb_size, w_init=w_init_fn),
+        hk.Linear(hidden_size, w_init=w_init_fn),
+        hk.dropout(rate=0.1),
+        hk.Linear(hidden_size, w_init=w_init_fn),
         hk.Linear(1)
       ] 
       , name='global_readout_linear')
   return net(feats)
 
-def net_fn(graph: jraph.GraphsTuple, steps:int, emb_size:int=128) -> jraph.GraphsTuple:
+def net_fn(graph: jraph.GraphsTuple, steps:int, hidden_size:int=128) -> jraph.GraphsTuple:
   # Add a global paramater for graph classification.
   graph = graph._replace(globals=jnp.ones([graph.n_node.shape[0], 1]))
   embedder = jraph.GraphMapFeatures(
-      hk.Linear(emb_size), 
-      hk.Linear(emb_size), 
-      hk.Linear(emb_size))
+      hk.Linear(hidden_size), 
+      hk.Linear(hidden_size), 
+      hk.Linear(hidden_size))
   
   weight_init_fn = hk.initializers.TruncatedNormal(1. / np.sqrt(1e4))
-  mlp_fn = partial(base_mlp, emb_size=emb_size, activation_fn=jax.nn.silu, w_init_fn=weight_init_fn)
-  readout_global_fn = partial(readout_mlp, emb_size=emb_size, activation_fn=jax.nn.silu, w_init_fn=weight_init_fn)
+  mlp_fn = partial(base_mlp, hidden_size=hidden_size, activation_fn=jax.nn.silu, w_init_fn=weight_init_fn)
+  readout_global_fn = partial(readout_mlp, hidden_size=hidden_size, activation_fn=jax.nn.silu, w_init_fn=weight_init_fn)
   node_update_fn = update_edge_fn = update_global_fn = mlp_fn
 
   
