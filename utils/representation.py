@@ -3,6 +3,33 @@ from jraph import GraphsTuple
 from pymatgen.core import Structure
 import numpy as np
 from typing import Dict, List, Optional, Union, Callable
+from mp_api.client import MPRester
+import json
+
+
+MP_API_KEY = 'UxYiT0ht7YNg2b6k0oqUVi7LtrUCf9m6'
+def get_structures_from_mp_api(material_ids:List[str], json_save_filename:Optional[str]) -> List[Dict]:
+    """
+    download the materials' crystal structure data by calling Materials Projects API with MPRester package
+    This function will output list of structures that have been converted to dict to allow the data to be saved as JSON
+
+    material_ids: list of material_id which structure will be downloaded
+    json_save_filename: file name to save the structure data
+    """
+    with MPRester(MP_API_KEY) as mpr:
+        unit_cell_structures = []
+        for mid in material_ids:
+            try:
+                st = mpr.get_structure_by_material_id(mid)
+                unit_cell_structures.append(st.as_dict())
+            except Exception as e:
+                print(mid, e)
+    
+    if json_save_filename is not None:
+        with open(json_save_filename,'w') as f:
+            json.dump(unit_cell_structures, f)
+    
+    return unit_cell_structures
 
 def get_coordinates(structure:Structure):
     atomic_numbers = np.array([x.specie.number for x in structure.sites])
