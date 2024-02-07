@@ -2,7 +2,7 @@ import jax.numpy as jnp
 from jraph import GraphsTuple
 from pymatgen.core import Structure
 import numpy as np
-from typing import Dict, List, Optional, Union, Callable
+from typing import Dict, List, Optional, Union, Callable, Tuple
 from mp_api.client import MPRester
 import json
 
@@ -31,13 +31,19 @@ def get_structures_from_mp_api(material_ids:List[str], json_save_filename:Option
     
     return unit_cell_structures
 
-def get_coordinates(structure:Structure):
+def get_coordinates(structure:Structure) -> Tuple[np.array, np.array, int]:
+    """
+    Take a pymatgen Structure object and convert it to a tuple of array of atomic_numbers, array of coordinates, and the number of sites
+    """
     atomic_numbers = np.array([x.specie.number for x in structure.sites])
     coordinates = np.array([x.coords for x in structure.sites])
     n_sites = structure.num_sites
     return atomic_numbers, coordinates, n_sites
 
 def get_coulomb_matrix(structure:Structure):
+    """
+    Generate coulomb matrix from the unit cell coordinates
+    """
     atomic_numbers, coordinates, n_sites = get_coordinates(structure)
     coulomb_matrix = np.zeros((n_sites, n_sites))
 
@@ -55,12 +61,18 @@ def get_coulomb_matrix(structure:Structure):
 # the idea of representing periodic structure like crystal structure using sine matrix is taken from https://arxiv.org/abs/1503.07406
 # code is adapted from https://www.kaggle.com/code/asatoonishi/using-sine-matrix
 ## it's a modification of Coulomb Matrix representation that has been used to represent organic molecules
-## the distance vector here is modified to an alternative coordinate r' where r' = sin^2 r = np.transpose(sin^2 x, sin^2 y, sin^2 z)
+## the distance  vector R is converted to ratio of lattice vector r = A^-1 . R, with A being the lattice vector
+## then it's modified to an alternative coordinate r_alt where r_alt = sin^2 r = np.transpose(sin^2 x, sin^2 y, sin^2 z) to account for periodicity
+##      and finally convert it back to angstrom scale, R_new = A.r_alt
+
 def get_sine_matrix(structure:Structure):
+    """
+    Generate sine matrix from the unit cell coordinates
+    """
     atomic_numbers, coordinates, n_sites = get_coordinates(structure)
     sine_matrix = np.zeros((n_sites, n_sites))
-    _lattice_vector = np.transpose([[x for x in structure.lattice.abc]])
-    _inverse_lattice_vector = np.linalg.pinv(_lattice_vector)
+    _lattice_vector = np.transpose([[x for x in structure.lattice.abc]])    # calculate lattice vector
+    _inverse_lattice_vector = np.linalg.pinv(_lattice_vector)               # calculate inverse of lattice vector, pseudo inverse is used here as the lattice vector is not guaranteed to have inverse
 
     for i in range(n_sites):
         for j in range(i):
@@ -75,6 +87,11 @@ def get_sine_matrix(structure:Structure):
     return sine_matrix
 
 def get_eigen_matrix(structure:Structure, matrix_fn:Callable):
+    """
+    generate sorted eigen values from either coulomb matrix or sine matrix representation of the crystal structure.
+    structure: Pymatgen Structure object representing the materials crystal structure
+    matrix_fn: can be either get_coulomb_matrix or get_sine_matrix
+    """
     unsorted_CM = matrix_fn(structure)
     eigen = np.linalg.eigvalsh(unsorted_CM)
     eigen = np.sort(eigen)[::-1]    # [::-1] reverse the sorted array and make it into descending order
